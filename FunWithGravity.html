@@ -1,0 +1,359 @@
+<script type="text/javascript">
+var context;
+
+var scale = 100;     // to map real positions to location on screen
+
+var sim_time;        // total amount of time steps simulated
+var real_time;       // seconds of simulation
+var start_time;      // time that the simulation was started
+
+var collision_marker = "XXXXX";   // marker to output on the form for a planet's vel, acc, and pos
+								// if there is a collision involving it
+
+default_config = new Object();
+// default_config.g = 0.00000000006674;
+default_config.tick_freq = 10;			// call update function every 10 ms (default)
+default_config.g = 10000;				// gravity, default value is 10000
+default_config.sun_rad = 20 * scale;	// sun radius
+default_config.planet_rad = 10 * scale;	// planet radius
+default_config.moon_rad = 5 * scale;	// moon radius
+default_config.planet_alive = true;		// planet collision? default = no
+default_config.moon_alive = true;		// moon collision?
+default_config.mp = 500;				// mass of planet
+default_config.mm = 50;					// mass of moon
+default_config.ms = 10000;				// mass of Sun
+default_config.vpx = 0;					// velocity of planet in the x-direction
+default_config.vpy = 0;					// velocity of planet in the y-direction
+default_config.vmx = 0;					// velocity of the moon in the x-direction
+default_config.vmy = 0;					// velocity of the moon in the y-direction
+default_config.xp = 100 * scale;		// x-coordinate of the planet
+default_config.yp = 100 * scale;		// y-coordinate of the planet
+default_config.xm = 350 * scale;		// x-coordinate of the moon
+default_config.ym = 350 * scale;		// y-coordinate of the moon
+default_config.xs = 250 * scale;		// x-coordinate of the sun
+default_config.ys = 250 * scale;		// y-coordinate of the sun
+default_config.amx = 0;					// acceleration of the moon in the x-direction. 
+default_config.amy = 0;					// acceleration of the moon in the x-direction.
+default_config.apx = 0;					// acceleration of the moon in the x-direction.
+default_config.apy = 0;					// acceleration of the moon in the x-direction.
+//default_config.Rmp;					// the distance between the moon and the planet
+//default_config.Rms;					// the distance between the moon and the sun
+//default_config.Rps;					// the distance between the planet and the sun.
+default_config.t = 1;					// time interval 
+
+current = new Object();					// obj to hold current config
+clone(current, default_config);
+last_run_config = new Object();         // obj to hold the config of the last run
+clone(last_run_config, default_config);
+
+var update_fn;	// pointer to the function that is repeated called to perform the updates and simulation
+
+// taken from stackoverflow.com for deep copying a JS object
+function clone(destination, source) {
+	for (var property in source) {
+		if (typeof source[property] === "object" && source[property] !== null && destination[property]) { 
+			clone(destination[property], source[property]);
+		} else {
+			destination[property] = source[property];
+		}
+	}
+}
+
+function mapToScreen(pos){
+	return pos / scale;
+}
+
+function draw(trails){
+	context = myCanvas.getContext('2d');
+	if (trails) {
+		// only clear the top area where "COLLISION" is written
+		context.clearRect(0,0,500,50);
+		context.fillStyle="#000000";
+		context.fillRect(0,50,500,1);	// draw line
+	} else {  
+		// clear the entire drawing area
+		context.clearRect(0,0,500,500);
+	}
+
+	// draw sun
+	context.beginPath();
+		//	context.arc(x,y,r,start,stop);	
+	context.arc(mapToScreen(current.xs),mapToScreen(current.ys),mapToScreen(current.sun_rad),0,2*Math.PI);
+	context.fillStyle="#000000";
+	context.stroke();	
+	context.closePath();
+	context.fillStyle="#FFFF00";
+	context.fill();
+	
+	// draw planet - check if planet has collided
+	if (current.planet_alive) {
+		context.beginPath();
+		context.arc(mapToScreen(current.xp),mapToScreen(current.yp),mapToScreen(current.planet_rad),0,2*Math.PI);
+		context.fillStyle="#000000";
+		context.stroke();
+		context.closePath();
+		context.fillStyle="#33CC33";
+		context.fill();	
+	} 
+	
+	// draw moon
+	if (current.moon_alive) {
+		context.beginPath();
+		context.arc(mapToScreen(current.xm),mapToScreen(current.ym),mapToScreen(current.moon_rad),0,2*Math.PI);		
+		context.fillStyle="#000000";
+		context.stroke();
+		context.closePath();
+		context.fillStyle="#C0C0C0";
+		context.fill();	
+	}
+}
+
+function valid(form) {
+	// not valid parameters if either the planet or moon are still in a "collision" state
+	if (form.vpx.value == collision_marker || form.vmx.value == collision_marker)
+		return false;
+	else
+		return true;
+}
+
+function start(form) {
+	// only start the simulation if form values are ok
+	// this prevents someone from trying to re-start a "collision" simulation with XXXXX values
+	// doing so, would erase their previous run configuration
+	if (valid(form)) {
+		clone(last_run_config, current);	 // copy the run we are about to do and save as the last run
+		start_time = new Date().getTime();   // record the start time, this will be used to calculate elapsed time
+		resume(form); 
+	}
+}
+
+
+function tick(form) {
+	real_time = (new Date().getTime() - start_time) / 1000; // convert ms to s   
+					  // calculate elapsed real time by subtracting current time from start
+	                  // note that javascript is asynchronous, single-threaded
+	                  // an incremental timer that goes by the tick count may not execute fast enough 
+	sim_time += current.t;    // update elapsed simulation time using time step
+	
+	collision = update();	// update positions for next render
+	draw(form.trail.checked);
+	output(form);
+	if (collision == 1) {
+		context = myCanvas.getContext('2d');
+		context.font="italic small-caps bold 32px Georgia";	
+		context.fillStyle="#000000";
+		// context.fillText("COLLISION", 150, 250);
+		if (current.planet_alive && !current.moon_alive) {
+			context.fillText("MOON COLLISION", 100, 30);
+			pause(form);
+		}
+		else if (!current.planet_alive && current.moon_alive) {
+			context.fillText("PLANET COLLISION", 100, 30);
+			pause(form);
+		}
+		else {
+			context.fillText("COLLISION", 150, 30);
+			stop();
+		}
+	}
+}
+
+function pause(form) {
+	stop();
+	setTimeout(function(){resume(form)}, 1000); // call restart in 1000 ms
+}
+
+function resume(form) {
+	update_fn = setInterval(function(){tick(form)}, current.tick_freq);
+}
+
+function stop() {
+	clearInterval(update_fn);
+}
+
+function init(form, def_val) {
+	if (def_val == true) {
+	//	alert("true is " + def_val);
+		clone(current, default_config);
+	} else {
+	//	alert("false is " + def_val);
+		clone(current, last_run_config);
+	}
+	
+	sim_time = 0;
+	real_time = 0;
+	
+	context = myCanvas.getContext('2d');
+	context.clearRect(0,0,500,500);
+	draw(form.trail.checked);
+	output(form);
+}
+
+function input(form) {
+	current.tick_freq = parseFloat(form.tick.value);
+	current.t = parseFloat(form.t.value);
+
+	current.mp = parseFloat(form.mp.value);
+	current.ms = parseFloat(form.ms.value);
+	current.mm = parseFloat(form.mm.value);
+	
+	current.vpx = parseFloat(form.vpx.value);
+	current.vpy = parseFloat(form.vpy.value);
+	current.vmx = parseFloat(form.vmx.value);
+	current.vmy = parseFloat(form.vmy.value);
+	
+	current.xp = parseFloat(form.planet_x_pos.value);
+	current.yp = parseFloat(form.planet_y_pos.value);
+	current.xm = parseFloat(form.moon_x_pos.value);
+	current.ym = parseFloat(form.moon_y_pos.value);	
+	
+	// current.g = parseFloat(form.g.value);	
+	
+	//draw(form.trail.checked);	
+	draw(false);	// always redraw the entire screen on any new user input
+}
+
+function output(form) {
+
+	if (current.planet_alive) {
+		form.planet_x_pos.value = current.xp.toFixed(0);   // toFixed = decimal places
+		form.planet_y_pos.value = current.yp.toFixed(0);
+		form.vpx.value = current.vpx;
+		form.vpy.value = current.vpy;
+		form.apx.value = current.apx;
+		form.apy.value = current.apy;
+	} else {
+		form.planet_x_pos.value = collision_marker;
+		form.planet_y_pos.value = collision_marker;
+		form.vpx.value = collision_marker;
+		form.vpy.value = collision_marker;
+		form.apx.value = collision_marker;
+		form.apy.value = collision_marker;		
+	}
+
+	if (current.moon_alive) {
+		form.moon_x_pos.value = current.xm.toFixed(0);
+		form.moon_y_pos.value = current.ym.toFixed(0);	
+		form.vmx.value = current.vmx;
+		form.vmy.value = current.vmy;
+		form.amx.value = current.amx;
+		form.amy.value = current.amy;		
+	} else {
+		form.moon_x_pos.value = collision_marker;
+		form.moon_y_pos.value = collision_marker;
+		form.vmx.value = collision_marker;
+		form.vmy.value = collision_marker;
+		form.amx.value = collision_marker;
+		form.amy.value = collision_marker;
+	}
+
+	form.sun_pos.value = "("+current.xs+","+current.ys+")";
+	form.t.value = current.t;
+	form.mm.value = current.mm;
+	form.mp.value = current.mp;
+	form.ms.value = current.ms;
+	
+	//form.g.value = current.g;
+	form.tick.value = current.tick_freq;
+	
+	form.real_time.value = real_time;
+	form.sim_time.value = sim_time;
+}
+
+
+function update(){
+	// calculate new distances
+	var Rmp = Math.sqrt( Math.pow(current.yp - current.ym, 2) + Math.pow(current.xp - current.xm, 2));
+	var Rps = Math.sqrt( Math.pow(current.ys - current.yp, 2) + Math.pow(current.xs - current.xp, 2));	
+	var Rms = Math.sqrt( Math.pow(current.ys - current.ym, 2) + Math.pow(current.xs - current.xm, 2));
+	
+	// calculate new accelerations
+	current.apy = current.g * current.ms * (current.ys - current.yp) / Math.pow(Rps,3) + current.g * current.mm * (current.ym - current.yp) / Math.pow(Rmp,3);
+	current.apx = current.g * current.ms * (current.xs - current.xp) / Math.pow(Rps,3) + current.g * current.mm * (current.xm - current.xp) / Math.pow(Rmp,3);
+	current.amy = current.g * current.ms * (current.ys - current.ym) / Math.pow(Rms,3) + current.g * current.mp * (current.yp - current.ym) / Math.pow(Rmp,3);
+	current.amx = current.g * current.ms * (current.xs - current.xm) / Math.pow(Rms,3) + current.g * current.mp * (current.xp - current.xm) / Math.pow(Rmp,3);	
+
+	// update new velocities
+	current.vpx = current.vpx + current.apx * current.t;
+	current.vpy = current.vpy + current.apy * current.t;
+	current.vmx = current.vmx + current.amx * current.t;
+	current.vmy = current.vmy + current.amy * current.t;
+	
+	// update new positions
+	current.xp = current.xp + current.vpx * current.t + .5 * current.apx * current.t * current.t;
+	current.yp = current.yp + current.vpy * current.t + .5 * current.apy * current.t * current.t;
+	current.xm = current.xm + current.vmx * current.t + .5 * current.amx * current.t * current.t;
+	current.ym = current.ym + current.vmy * current.t + .5 * current.amy * current.t * current.t;	
+	
+	// collision detection
+	if (current.planet_alive && current.moon_alive && Rmp < (current.planet_rad + current.moon_rad)) {
+		current.planet_alive = false;
+		current.moon_alive = false;
+		return 1;
+	} else if (current.planet_alive && Rps < (current.sun_rad + current.planet_rad)) {
+		current.planet_alive = false;
+		return 1;
+	} else if (current.moon_alive && Rms < (current.sun_rad + current.moon_rad)) {
+		current.moon_alive = false;
+		return 1;
+	}
+	else
+		return 0;
+}
+</script>
+
+<!DOCTYPE html>
+<html>
+<head>
+
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>Fun With Gravity!</title>
+
+<style type="text/css">
+<!--
+body { background-color:#ededed; font:normal 12px/18px Arial, Helvetica, sans-serif; }
+h1 { display:block; width:600px; margin:20px auto; padding-bottom:20px; font:normal 24px/30px Georgia, "Times New Roman", Times, serif; color:#333; text-shadow: 1px 2px 3px #ccc; border-bottom:1px solid #cbcbcb; }
+#container { width:900px; margin:0 auto; }
+#myCanvas { background:#fff; border:1px solid #cbcbcb; margin-right:10px; float:left; }
+.special { color:red; }
+-->
+</style>
+</head>
+
+<body onload="init(f, true)">
+<h1>Fun With Gravity!</h1>
+<div id="container">
+	<canvas id="myCanvas" width="500" height="500"></canvas>
+	<form id="f">
+		Time step: <input name="t" size=15 onchange="input(f)"><br />
+		Planet mass: <input name="mp" size=15 onchange="input(f)"><br />
+		Sun mass: <input name="ms" size=15 onchange="input(f)"><br />
+		Moon mass: <input name="mm" size=15 onchange="input(f)"><br />
+		Planet x velocity: <input name="vpx" size=25 onchange="input(f)"><br />
+		Planet y velocity: <input name="vpy" size=25 onchange="input(f)"><br />
+		Moon x velocity: <input name="vmx" size=25 onchange="input(f)"><br />
+		Moon y velocity: <input name="vmy" size=25 onchange="input(f)"><br />				
+		Planet x position: <input name="planet_x_pos" size=7 onchange="input(f)">
+		Planet y position: <input name="planet_y_pos" size=7 onchange="input(f)"><br />
+		Moon x position: <input name="moon_x_pos" size=7 onchange="input(f)">
+		Moon y position: <input name="moon_y_pos" size=7 onchange="input(f)"><br />
+		<input type="button" value="Start" onclick="start(f)"> 
+		Total Time (Simulated): <input name="sim_time" readonly size=7><br />
+		<input type="button" value="Stop" onclick="stop()">
+		Total Time (Elapsed): <input name="real_time" readonly size=7><br />
+		<input type="button" value="Reset (last run)" onclick="init(f, false)"><br />
+		<input type="button" value="Reset (default values)" onclick="init(f, true)"><br />
+		Sun position: <input name="sun_pos" readonly size=20><br />
+		Planet x acceleration: <input name="apx" readonly size=25><br />
+		Planet y acceleration: <input name="apy" readonly size=25><br />
+		Moon x acceleration: <input name="amx" readonly size=25><br />					
+		Moon y acceleration: <input name="amy" readonly size=25><br />
+		<input type="checkbox" name="trail">Display trails<br />
+		
+		<!--<span class="special">Gravity: <input name="g" size = 25 onchange="input(f)"></span><br />-->	
+		<span class="special">Simulation update freq. (ms): <input name="tick" size = 25 onchange="input(f)"></span>
+	</form>
+</div>
+
+</body>
+</html>
